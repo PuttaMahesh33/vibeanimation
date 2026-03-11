@@ -3,7 +3,7 @@
 
 // ⚠️  IMPORTANT: Replace with your actual Render backend URL after deployment
 // Example: const BACKEND_URL = 'https://vibe-animation-backend.onrender.com';
-const BACKEND_URL = window.BACKEND_URL || 'https://YOUR_RENDER_APP.onrender.com';
+const BACKEND_URL = window.BACKEND_URL || 'https://vibeanimation-maheshputta7991-176c7r8m.leapcell.site';
 
 // ─── State ────────────────────────────────────────────────────
 const S = {
