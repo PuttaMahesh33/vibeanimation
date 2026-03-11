@@ -1,90 +1,44 @@
-// backend/judge.js — Production Puppeteer judging engine
 'use strict';
 
-const puppeteer  = require('puppeteer');
+const puppeteer  = require('puppeteer-core');
 const { PNG }    = require('pngjs');
 const pixelmatch = require('pixelmatch');
 const path       = require('path');
 const fs         = require('fs');
 
-// Levels are in the project root /levels directory (one level up from /backend)
-const LEVELS_DIR = process.env.LEVELS_DIR || path.join(__dirname, '..', 'levels');
-const VIEWPORT   = { width: 600, height: 400 };
+const LEVELS_DIR  = process.env.LEVELS_DIR || path.join(__dirname, '..', 'levels');
+const VIEWPORT    = { width: 600, height: 400 };
 const FRAME_COUNT = 8;
 const DURATION_MS = 2000;
 
-// Cache reference frames to avoid re-capturing
 const refFrameCache = new Map();
-
-// Browser pool
 let browserPool = [];
 const MAX_BROWSERS = 2;
-const BROWSER_TTL  = 120000; // 2 min
-
-// ─── Chrome detection ─────────────────────────────────────────
-// Render installs Chrome during postinstall into the Puppeteer cache.
-// We scan multiple candidate directories to find it.
+const BROWSER_TTL  = 120000;
 
 function findChrome() {
-  // 1. Explicit env var (highest priority)
   if (process.env.PUPPETEER_EXECUTABLE_PATH) return process.env.PUPPETEER_EXECUTABLE_PATH;
-
-  // 2. Scan Puppeteer cache directories
-  const cacheCandidates = [
-    process.env.PUPPETEER_CACHE_DIR,
-    path.join(process.env.HOME || '/root', '.cache', 'puppeteer'),
-    '/opt/render/.cache/puppeteer',
-    '/opt/render/project/.render/chrome',
-    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.cache', 'puppeteer') : null,
-  ].filter(Boolean);
-
-  for (const cacheDir of cacheCandidates) {
-    const found = scanCacheDir(cacheDir);
-    if (found) return found;
-  }
-
-  // 3. Well-known system paths (Linux / Windows)
   const systemPaths = [
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/opt/google/chrome/chrome',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
   ];
   for (const p of systemPaths) {
     try { if (fs.existsSync(p)) return p; } catch {}
   }
-
-  return null; // let Puppeteer use its own default
-}
-
-function scanCacheDir(cacheDir) {
-  try {
-    const chromeDir = path.join(cacheDir, 'chrome');
-    if (!fs.existsSync(chromeDir)) return null;
-    for (const version of fs.readdirSync(chromeDir)) {
-      const subPaths = [
-        'chrome-linux64/chrome',
-        'chrome-linux/chrome',
-        'chrome-win64/chrome.exe',
-        'chrome-win32/chrome.exe',
-        'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-      ];
-      for (const sub of subPaths) {
-        const full = path.join(chromeDir, version, sub);
-        try { if (fs.existsSync(full)) return full; } catch {}
-      }
-    }
-  } catch {}
   return null;
 }
 
-// ─── Launch options (safe for Render / cloud) ─────────────────
-
 function getLaunchOptions() {
-  const opts = {
+  const exe = findChrome();
+  if (!exe) throw new Error('Chrome not found. Set PUPPETEER_EXECUTABLE_PATH env var.');
+  console.log('[Puppeteer] Using Chrome:', exe);
+  return {
+    executablePath: exe,
     headless: 'new',
     args: [
       '--no-sandbox',
@@ -92,26 +46,11 @@ function getLaunchOptions() {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--disable-translate',
-      '--no-first-run',
       '--single-process',
       '--memory-pressure-off',
     ],
   };
-  const exe = findChrome();
-  if (exe) {
-    console.log('[Puppeteer] Using Chrome:', exe);
-    opts.executablePath = exe;
-  } else {
-    console.log('[Puppeteer] Using Puppeteer bundled Chrome');
-  }
-  return opts;
 }
-
-// ─── Browser pool ─────────────────────────────────────────────
 
 async function getBrowser() {
   while (browserPool.length > 0) {
@@ -133,8 +72,6 @@ function releaseBrowser(browser) {
   }
 }
 
-// ─── Validation ───────────────────────────────────────────────
-
 function validateCode(code) {
   const errors = [];
   const stripped = code.replace(/<!--[\s\S]*?-->/g, '');
@@ -145,8 +82,6 @@ function validateCode(code) {
   if (/on[a-z]+\s*=/i.test(stripped))      errors.push('Inline event handlers are not allowed.');
   return errors;
 }
-
-// ─── HTML wrapping ────────────────────────────────────────────
 
 function wrapHtml(code) {
   if (/<!doctype/i.test(code) || /<html/i.test(code)) return code;
@@ -164,13 +99,10 @@ html,body{width:600px;height:400px;display:flex;align-items:center;
 </html>`;
 }
 
-// ─── Frame capture ────────────────────────────────────────────
-
 async function captureFrames(html, isRef = false, level = null) {
   if (isRef && level !== null && refFrameCache.has(`l${level}`)) {
     return refFrameCache.get(`l${level}`).map(b => Buffer.from(b));
   }
-
   let browser = null;
   const frames = [];
   try {
@@ -179,28 +111,21 @@ async function captureFrames(html, isRef = false, level = null) {
     await page.setViewport(VIEWPORT);
     await page.setContent(wrapHtml(html), { waitUntil: 'networkidle0', timeout: 15000 });
     await delay(120);
-
     const step = Math.floor(DURATION_MS / (FRAME_COUNT - 1));
     for (let i = 0; i < FRAME_COUNT; i++) {
-      frames.push(await page.screenshot({
-        type: 'png',
-        clip: { x: 0, y: 0, ...VIEWPORT },
-      }));
+      frames.push(await page.screenshot({ type: 'png', clip: { x: 0, y: 0, ...VIEWPORT } }));
       if (i < FRAME_COUNT - 1) await delay(step);
     }
     await page.close();
   } finally {
     if (browser) releaseBrowser(browser);
   }
-
   if (isRef && level !== null) {
     refFrameCache.set(`l${level}`, frames.map(b => Buffer.from(b)));
     if (refFrameCache.size > 6) refFrameCache.delete(refFrameCache.keys().next().value);
   }
   return frames;
 }
-
-// ─── Scoring helpers ──────────────────────────────────────────
 
 function compareFrames(a, b) {
   try {
@@ -263,16 +188,12 @@ function scoreDom(code) {
   return Math.min(1, s);
 }
 
-// ─── Public API ───────────────────────────────────────────────
-
 async function judgeSubmission(code, level) {
   const errors = validateCode(code);
   if (errors.length) return { valid: false, errors, score: 0, breakdown: null };
-
   const refPath = path.join(LEVELS_DIR, `level${level}-reference.html`);
   if (!fs.existsSync(refPath))
     return { valid: false, errors: [`Reference for level ${level} not found.`], score: 0, breakdown: null };
-
   const refHtml = fs.readFileSync(refPath, 'utf8');
   let pFrames, rFrames;
   try {
@@ -283,13 +204,11 @@ async function judgeSubmission(code, level) {
   } catch (err) {
     return { valid: false, errors: ['Render failed: ' + err.message], score: 0, breakdown: null };
   }
-
   const visual = scoreVisual(pFrames, rFrames);
   const timing = scoreTiming(pFrames, rFrames);
   const css    = scoreCss(code);
   const dom    = scoreDom(code);
   const score  = Math.round(Math.min(100, (visual*0.6 + timing*0.2 + dom*0.1 + css*0.1) * 100));
-
   return {
     valid: true, errors: [], score,
     breakdown: {
@@ -302,7 +221,5 @@ async function judgeSubmission(code, level) {
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 process.on('exit', () => { browserPool.forEach(b => { try { b.close(); } catch {} }); });
-
 module.exports = { judgeSubmission };
