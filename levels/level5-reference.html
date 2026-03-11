@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:600px;height:400px;display:flex;align-items:center;justify-content:center;background:#08001a;overflow:hidden;}
+.burst{position:relative;width:0;height:0;}
+.p{position:absolute;width:10px;height:10px;border-radius:50%;animation:burst 2s ease-out infinite;}
+.p1{background:#ff0055;--tx:0px;--ty:-130px;}
+.p2{background:#ff4400;--tx:92px;--ty:-92px;animation-delay:.05s;}
+.p3{background:#ff9900;--tx:130px;--ty:0px;animation-delay:.1s;}
+.p4{background:#ffee00;--tx:92px;--ty:92px;animation-delay:.05s;}
+.p5{background:#44ff00;--tx:0px;--ty:130px;}
+.p6{background:#00ffaa;--tx:-92px;--ty:92px;animation-delay:.05s;}
+.p7{background:#00d4ff;--tx:-130px;--ty:0px;animation-delay:.1s;}
+.p8{background:#0066ff;--tx:-92px;--ty:-92px;animation-delay:.05s;}
+.p9{background:#aa00ff;--tx:50px;--ty:-120px;animation-delay:.03s;}
+.p10{background:#ff00aa;--tx:120px;--ty:-50px;animation-delay:.08s;}
+.p11{background:#ff6600;--tx:120px;--ty:50px;animation-delay:.03s;}
+.p12{background:#00ff66;--tx:50px;--ty:120px;animation-delay:.08s;}
+.p13{background:#00ffff;--tx:-50px;--ty:120px;animation-delay:.03s;}
+.p14{background:#0099ff;--tx:-120px;--ty:50px;animation-delay:.08s;}
+.p15{background:#cc00ff;--tx:-120px;--ty:-50px;animation-delay:.03s;}
+.p16{background:#ff0066;--tx:-50px;--ty:-120px;animation-delay:.08s;}
+@keyframes burst{0%{transform:translate(0,0) scale(1.2);opacity:1;}70%{opacity:.8;}100%{transform:translate(var(--tx),var(--ty)) scale(0);opacity:0;}}
+.core{position:absolute;width:18px;height:18px;border-radius:50%;background:white;transform:translate(-50%,-50%);animation:flash 2s ease-out infinite;box-shadow:0 0 30px white,0 0 60px rgba(255,255,255,.5);}
+@keyframes flash{0%{transform:translate(-50%,-50%) scale(2);opacity:1;}20%{transform:translate(-50%,-50%) scale(.8);opacity:.6;}100%{transform:translate(-50%,-50%) scale(.5);opacity:.2;}}
+</style></head>
+<body>
+<div class="burst">
+  <div class="core"></div>
+  <div class="p p1"></div><div class="p p2"></div><div class="p p3"></div><div class="p p4"></div>
+  <div class="p p5"></div><div class="p p6"></div><div class="p p7"></div><div class="p p8"></div>
+  <div class="p p9"></div><div class="p p10"></div><div class="p p11"></div><div class="p p12"></div>
+  <div class="p p13"></div><div class="p p14"></div><div class="p p15"></div><div class="p p16"></div>
+</div>
+</body></html>

@@ -1,0 +1,25 @@
+# Dependencies
+backend/node_modules/
+node_modules/
+
+# Puppeteer Chrome cache
+.cache/
+backend/.cache/
+**/.local-chromium/
+
+# Environment
+.env
+.env.local
+backend/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

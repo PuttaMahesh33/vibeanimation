@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vibe Animation — Technostav 2026</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <div class="brand-icon">🎨</div>
+    <div class="brand-text">
+      <div class="brand-title">Vibe Animation</div>
+      <div class="brand-sub">Technostav 2026 · 19th February</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="timer-wrap" id="timerWrap" style="display:none">
+      <div class="timer-label">Time</div>
+      <div class="timer" id="timer">00:00:00</div>
+    </div>
+    <div class="user-pill" id="userPill" style="display:none">
+      <div class="user-dot"></div>
+      <span id="userPillText">—</span>
+    </div>
+  </div>
+</header>
+
+<!-- LOGIN SCREEN -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-icon">🏆</div>
+    <h2>Join the Competition</h2>
+    <p>Recreate the reference animations using <strong>HTML &amp; CSS only</strong>. No JavaScript allowed.</p>
+    <div class="field">
+      <label>Roll Number</label>
+      <input type="text" id="rollInput" placeholder="e.g. 21BCE1234" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label>Full Name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Arjun Sharma" autocomplete="off">
+    </div>
+    <button class="btn-start" id="startBtn" onclick="joinCompetition()">Start Competition →</button>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div class="app" id="app">
+
+  <!-- LEVEL BAR -->
+  <div class="level-bar-wrap">
+    <div class="level-bar" id="levelBar"></div>
+  </div>
+
+  <!-- WORKSPACE -->
+  <div class="workspace">
+
+    <!-- LEFT: EDITOR -->
+    <div class="editor-panel">
+      <div class="panel-header">
+        <span class="panel-title">Code Editor</span>
+        <span class="panel-badge">HTML + CSS only</span>
+      </div>
+
+      <div class="editor-wrap" id="editorWrap">
+        <textarea id="codeEditor" spellcheck="false" placeholder="<!-- Write your HTML + CSS animation here -->"></textarea>
+        <!-- Lock overlay for submitted levels -->
+        <div class="lock-overlay" id="lockOverlay" style="display:none">
+          <div class="lock-content">
+            <div class="lock-icon">🔒</div>
+            <div class="lock-title">Level Submitted</div>
+            <div class="lock-sub">This level is locked. Your code is preserved below.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="btn btn-preview"  onclick="previewCode()"     id="previewBtn">▶ Preview</button>
+        <button class="btn btn-check"    onclick="checkAccuracy()"   id="checkBtn"   disabled>⚡ Check Accuracy</button>
+        <button class="btn btn-submit"   onclick="submitLevel()"     id="submitBtn"  disabled>✓ Submit Level</button>
+      </div>
+
+      <!-- ACCURACY PANEL -->
+      <div class="accuracy-panel" id="accPanel">
+        <div class="acc-top">
+          <div>
+            <div class="acc-label">Accuracy Score</div>
+            <div class="acc-score" id="accScore">0%</div>
+          </div>
+          <div class="acc-msg" id="accMsg"></div>
+        </div>
+        <div class="acc-bar"><div class="acc-bar-fill" id="accBarFill"></div></div>
+        <div class="breakdown" id="breakdown"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: PREVIEW -->
+    <div class="preview-panel">
+      <div class="tab-bar">
+        <button class="tab active" id="tabYours" onclick="switchTab('yours')">Your Animation</button>
+        <button class="tab" id="tabRef" onclick="switchTab('reference')">Reference</button>
+      </div>
+
+      <div class="preview-area" id="previewArea">
+        <div class="preview-placeholder" id="placeholder">
+          <div class="ph-icon">🎬</div>
+          <p>Click Preview to render your animation</p>
+        </div>
+        <div class="iframe-scaler" id="iframeScaler">
+          <iframe id="yourFrame" sandbox="allow-scripts allow-same-origin" style="display:none"></iframe>
+          <iframe id="refFrame"  style="display:none"></iframe>
+        </div>
+      </div>
+
+      <!-- BOTTOM GRID -->
+      <div class="bottom-grid">
+        <div class="info-card">
+          <div class="card-title">📈 Your Progress</div>
+          <div class="stat-row"><span>Completed</span><span class="stat-val" id="statDone">0 / 5</span></div>
+          <div class="stat-row"><span>Avg Accuracy</span><span class="stat-val" id="statAvg">—</span></div>
+          <div class="stat-row"><span>Your Rank</span><span class="stat-val" id="statRank">—</span></div>
+          <div class="lvl-dots" id="lvlDots">
+            <div class="lvl-dot" title="Level 1"></div>
+            <div class="lvl-dot" title="Level 2"></div>
+            <div class="lvl-dot" title="Level 3"></div>
+            <div class="lvl-dot" title="Level 4"></div>
+            <div class="lvl-dot" title="Level 5"></div>
+          </div>
+        </div>
+        <div class="info-card">
+          <div class="card-title">🏆 Leaderboard</div>
+          <div id="lbList"><div class="lb-loading">Loading…</div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SPINNER -->
+<div class="spinner-wrap" id="spinner">
+  <div class="spinner-ring"></div>
+  <div class="spinner-label" id="spinnerLabel">Processing…</div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script src="main.js"></script>
+</body>
+</html>
