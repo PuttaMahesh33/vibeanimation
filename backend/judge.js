@@ -39,7 +39,7 @@ function getLaunchOptions() {
   console.log('[Puppeteer] Using Chrome:', exe);
   return {
     executablePath: exe,
-    headless: 'new',
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -191,10 +191,13 @@ function scoreDom(code) {
 async function judgeSubmission(code, level) {
   const errors = validateCode(code);
   if (errors.length) return { valid: false, errors, score: 0, breakdown: null };
+
   const refPath = path.join(LEVELS_DIR, `level${level}-reference.html`);
   if (!fs.existsSync(refPath))
     return { valid: false, errors: [`Reference for level ${level} not found.`], score: 0, breakdown: null };
+
   const refHtml = fs.readFileSync(refPath, 'utf8');
+
   let pFrames, rFrames;
   try {
     [pFrames, rFrames] = await Promise.all([
@@ -204,13 +207,18 @@ async function judgeSubmission(code, level) {
   } catch (err) {
     return { valid: false, errors: ['Render failed: ' + err.message], score: 0, breakdown: null };
   }
+
   const visual = scoreVisual(pFrames, rFrames);
   const timing = scoreTiming(pFrames, rFrames);
   const css    = scoreCss(code);
   const dom    = scoreDom(code);
+
   const score  = Math.round(Math.min(100, (visual*0.6 + timing*0.2 + dom*0.1 + css*0.1) * 100));
+
   return {
-    valid: true, errors: [], score,
+    valid: true,
+    errors: [],
+    score,
     breakdown: {
       visual: Math.round(visual*100),
       timing: Math.round(timing*100),
@@ -221,5 +229,9 @@ async function judgeSubmission(code, level) {
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-process.on('exit', () => { browserPool.forEach(b => { try { b.close(); } catch {} }); });
+
+process.on('exit', () => {
+  browserPool.forEach(b => { try { b.close(); } catch {} });
+});
+
 module.exports = { judgeSubmission };
