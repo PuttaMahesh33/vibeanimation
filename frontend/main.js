@@ -586,3 +586,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
+// Keep backend alive — ping every 4 minutes
+setInterval(() => {
+  fetch(BACKEND_URL + '/api/health')
+    .then(() => console.log('[Ping] Backend kept alive'))
+    .catch(() => console.log('[Ping] Backend sleeping'));
+}, 240000);
