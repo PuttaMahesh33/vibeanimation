@@ -1,9 +1,7 @@
-// frontend/main.js — Production build (Vercel → Render)
+// public/main.js  — LOCAL DEV build
 'use strict';
 
-// ⚠️  IMPORTANT: Replace with your actual Render backend URL after deployment
-// Example: const BACKEND_URL = 'https://vibe-animation-backend.onrender.com';
-const BACKEND_URL = window.BACKEND_URL || 'https://YOUR_RENDER_APP.onrender.com';
+const BACKEND_URL = 'http://localhost:3000';
 
 // ─── State ────────────────────────────────────────────────────
 const S = {

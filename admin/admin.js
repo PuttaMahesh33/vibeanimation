@@ -1,9 +1,7 @@
-// frontend/admin.js — Production build (Vercel → Render)
+// admin/admin.js
 'use strict';
 
-// ⚠️  Replace with your actual Render backend URL
-const BACKEND_URL = window.BACKEND_URL || 'https://YOUR_RENDER_APP.onrender.com';
-
+const BACKEND_URL = 'http://localhost:3000';
 
 let TOKEN       = localStorage.getItem('adminToken') || '';
 let allData     = [];

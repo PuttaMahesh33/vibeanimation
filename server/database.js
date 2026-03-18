@@ -1,12 +1,10 @@
-// backend/database.js
+// server/database.js
 'use strict';
 
 const fs   = require('fs');
 const path = require('path');
 
-// On Render with persistent disk → DB_PATH env var points to /data/db.json
-// Locally → falls back to project root db.json
-const DB_FILE = process.env.DB_PATH || path.join(__dirname, '..', 'db.json');
+const DB_FILE = path.join(__dirname, '..', 'db.json');
 
 let _cache = null;
 
@@ -150,8 +148,7 @@ function getParticipantDetail(id) {
 
 function saveSubmission(participantId, level, accuracy, code) {
   const db = readDB();
-  const submission = { id: nextId(db.submissions), participantId, level, accuracy, code,
-    timestamp: new Date().toISOString() };
+  const submission = { id: nextId(db.submissions), participantId, level, accuracy, code, timestamp: new Date().toISOString() };
   db.submissions.push(submission);
   writeDB(db);
   return submission;
@@ -188,14 +185,13 @@ function getLeaderboard() {
     return { id: p.id, name: p.name, rollNumber: p.rollNumber,
       levelsCompleted: ll.length, avgAccuracy: Math.round(total/5),
       completionTime: p.completionTime || null, completedAt: p.completedAt || null,
-      startTime: p.startTime,
-      lastSubmission: subs.length > 0 ? subs[subs.length-1].timestamp : null };
+      startTime: p.startTime, lastSubmission: subs.length > 0 ? subs[subs.length-1].timestamp : null };
   }).sort((a,b) => {
     if (b.levelsCompleted !== a.levelsCompleted) return b.levelsCompleted - a.levelsCompleted;
     if (b.avgAccuracy !== a.avgAccuracy) return b.avgAccuracy - a.avgAccuracy;
     if (a.completionTime && b.completionTime) return a.completionTime - b.completionTime;
     if (a.completionTime) return -1;
-    if (b.completionTime) return  1;
+    if (b.completionTime) return 1;
     return 0;
   });
 }
