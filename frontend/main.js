@@ -3,7 +3,7 @@
 
 // ⚠️  IMPORTANT: Replace with your actual Render backend URL after deployment
 // Example: const BACKEND_URL = 'https://vibe-animation-backend.onrender.com';
-const BACKEND_URL = window.BACKEND_URL || 'https://vibeanimation-pm-3l55.onrender.com';
+const BACKEND_URL = window.BACKEND_URL || 'https://YOUR_RENDER_APP.onrender.com';
 
 // ─── State ────────────────────────────────────────────────────
 const S = {
@@ -494,8 +494,6 @@ function updateLvlDots() {
 }
 
 // ─── Leaderboard ─────────────────────────────────────────────
-let _lastLbHash = '';
-
 async function fetchLeaderboard() {
   try {
     const res  = await fetch(`${BACKEND_URL}/api/leaderboard`);
@@ -507,40 +505,32 @@ async function fetchLeaderboard() {
 function renderLeaderboard(entries) {
   const el = document.getElementById('lbList');
   if (!entries || !entries.length) {
-    const empty = '<div class="lb-loading">No submissions yet</div>';
-    if (el.innerHTML !== empty) el.innerHTML = empty;
-    return;
+    el.innerHTML = '<div class="lb-loading">No submissions yet</div>'; return;
   }
   const medals  = ['🥇','🥈','🥉'];
   const myRoll  = S.participant ? S.participant.rollNumber : null;
   let myRank    = -1;
 
-  const newHtml = entries.slice(0, 8).map((e, i) => {
+  el.innerHTML = entries.slice(0,8).map((e, i) => {
     const me = myRoll && e.rollNumber === myRoll;
     if (me) myRank = i + 1;
     const timeStr = e.completionTime ? formatTime(e.completionTime) : '';
-    return `<div class="lb-item${me ? ' me' : ''}" data-roll="${e.rollNumber}">
-      <div class="lb-rank">${medals[i] || '#' + (i + 1)}</div>
-      <div class="lb-name">${e.name}${me ? ' ◀' : ''}</div>
+    return `<div class="lb-item${me?' me':''}">
+      <div class="lb-rank">${medals[i] || '#'+(i+1)}</div>
+      <div class="lb-name">${e.name}${me?' ◀':''}</div>
       <div class="lb-score">${e.avgAccuracy}%</div>
       ${timeStr ? `<div class="lb-time">${timeStr}</div>` : ''}
     </div>`;
   }).join('');
 
-  // Only touch the DOM if content actually changed — prevents any flicker
-  const hash = newHtml;
-  if (hash !== _lastLbHash) {
-    _lastLbHash = hash;
-    el.innerHTML = newHtml;
-  }
-
   // Update rank in stats
   if (myRank > 0) {
     document.getElementById('statRank').textContent = `#${myRank}`;
   } else if (myRoll) {
+    // Check if participant is beyond top 8
     const fullIdx = entries.findIndex(e => e.rollNumber === myRoll);
     if (fullIdx >= 0) {
-      document.getElementById('statRank').textContent = `#${fullIdx + 1}`;
+      document.getElementById('statRank').textContent = `#${fullIdx+1}`;
     }
   }
 }
@@ -596,9 +586,3 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 });
-// Keep backend alive — ping every 4 minutes
-setInterval(() => {
-  fetch(BACKEND_URL + '/api/health')
-    .then(() => console.log('[Ping] Backend kept alive'))
-    .catch(() => console.log('[Ping] Backend sleeping'));
-}, 240000);

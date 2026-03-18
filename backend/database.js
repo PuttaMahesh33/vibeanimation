@@ -1,339 +1,211 @@
-// backend/database.js — Supabase PostgreSQL edition
-// Uses the standard `pg` driver with a connection pool.
-// Set DATABASE_URL in your Render environment variables to your Supabase connection string.
+// backend/database.js
 'use strict';
 
-const { Pool } = require('pg');
+const fs   = require('fs');
+const path = require('path');
 
-// Supabase provides a "Transaction" pooler URL (port 6543) — use that for serverless.
-// For Render (long-running server) the direct URL (port 5432) also works fine.
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },  // required for Supabase
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-});
+// On Render with persistent disk → DB_PATH env var points to /data/db.json
+// Locally → falls back to project root db.json
+const DB_FILE = process.env.DB_PATH || path.join(__dirname, '..', 'db.json');
 
-pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
+let _cache = null;
 
-// ─── Schema bootstrap ─────────────────────────────────────────
-// Run once on startup: creates tables if they don't exist.
-// (You can also run the SQL manually in the Supabase SQL editor.)
-
-async function initSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS participants (
-      id               SERIAL PRIMARY KEY,
-      name             TEXT        NOT NULL,
-      roll_number      TEXT        UNIQUE NOT NULL,
-      joined_time      TIMESTAMPTZ DEFAULT NOW(),
-      start_time       BIGINT      NOT NULL,
-      completion_time  BIGINT,
-      completed_at     TIMESTAMPTZ,
-      level_times      JSONB       DEFAULT '{}',
-      level_start_times JSONB      DEFAULT '{}',
-      locked_levels    JSONB       DEFAULT '[]',
-      level_codes      JSONB       DEFAULT '{}',
-      level_accuracies JSONB       DEFAULT '{}'
-    );
-
-    CREATE TABLE IF NOT EXISTS submissions (
-      id             SERIAL  PRIMARY KEY,
-      participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
-      level          INTEGER NOT NULL,
-      accuracy       INTEGER NOT NULL,
-      code           TEXT    NOT NULL,
-      timestamp      TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_submissions_participant ON submissions(participant_id);
-    CREATE INDEX IF NOT EXISTS idx_submissions_level       ON submissions(level);
-  `);
-  console.log('[DB] Schema ready ✔');
+function readDB() {
+  if (_cache) return _cache;
+  try {
+    const raw = fs.readFileSync(DB_FILE, 'utf8');
+    _cache = JSON.parse(raw);
+    return _cache;
+  } catch (e) {
+    _cache = { participants: [], submissions: [] };
+    writeDB(_cache);
+    return _cache;
+  }
 }
 
-// Call on startup — errors are logged but do not crash the server
-initSchema().catch(e => console.error('[DB] Schema init failed:', e.message));
-
-// ─── Helper: row → participant object ──────────────────────────
-
-function rowToParticipant(r) {
-  return {
-    id:               r.id,
-    name:             r.name,
-    rollNumber:       r.roll_number,
-    joinedTime:       r.joined_time,
-    startTime:        Number(r.start_time),
-    completionTime:   r.completion_time ? Number(r.completion_time) : null,
-    completedAt:      r.completed_at || null,
-    levelTimes:       r.level_times        || {},
-    levelStartTimes:  r.level_start_times  || {},
-    lockedLevels:     r.locked_levels      || [],
-    levelCodes:       r.level_codes        || {},
-    levelAccuracies:  r.level_accuracies   || {},
-  };
-}
-
-function rowToSubmission(r) {
-  return {
-    id:            r.id,
-    participantId: r.participant_id,
-    level:         r.level,
-    accuracy:      r.accuracy,
-    code:          r.code,
-    timestamp:     r.timestamp,
-  };
-}
-
-// ─── Public API ───────────────────────────────────────────────
-
-async function upsertParticipant(name, rollNumber) {
-  // Return existing participant if roll already registered
-  const existing = await pool.query(
-    'SELECT * FROM participants WHERE roll_number = $1', [rollNumber]
-  );
-  if (existing.rows.length > 0) return rowToParticipant(existing.rows[0]);
-
-  const now = Date.now();
-  const { rows } = await pool.query(
-    `INSERT INTO participants
-       (name, roll_number, joined_time, start_time,
-        level_times, level_start_times, locked_levels, level_codes, level_accuracies)
-     VALUES ($1,$2,NOW(),$3,'{}','{}','[]','{}','{}')
-     RETURNING *`,
-    [name, rollNumber, now]
-  );
-  return rowToParticipant(rows[0]);
-}
-
-async function getParticipantByRoll(rollNumber) {
-  const { rows } = await pool.query(
-    'SELECT * FROM participants WHERE roll_number = $1', [rollNumber]
-  );
-  return rows.length > 0 ? rowToParticipant(rows[0]) : null;
-}
-
-async function getParticipantById(id) {
-  const { rows } = await pool.query(
-    'SELECT * FROM participants WHERE id = $1', [id]
-  );
-  return rows.length > 0 ? rowToParticipant(rows[0]) : null;
-}
-
-async function startLevelTimer(participantId, level) {
-  // Only record the start time if it hasn't been set yet
-  await pool.query(
-    `UPDATE participants
-     SET level_start_times = CASE
-       WHEN (level_start_times->>$2::text) IS NULL
-         THEN jsonb_set(level_start_times, ARRAY[$2::text], $3::jsonb)
-       ELSE level_start_times
-     END
-     WHERE id = $1`,
-    [participantId, String(level), JSON.stringify(Date.now())]
-  );
-  return getParticipantById(participantId);
-}
-
-async function lockLevel(participantId, level, code, accuracy) {
-  const p = await getParticipantById(participantId);
-  if (!p) return null;
-
-  const startMs   = p.levelStartTimes[level] || p.startTime;
-  const levelTime = Date.now() - startMs;
-
-  // Build updated JSON columns
-  const newLocked    = p.lockedLevels.includes(level) ? p.lockedLevels : [...p.lockedLevels, level];
-  const newCodes     = { ...p.levelCodes,      [level]: code };
-  const newAccs      = { ...p.levelAccuracies, [level]: accuracy };
-  const newTimes     = { ...p.levelTimes,      [level]: levelTime };
-
-  const allDone      = [1,2,3,4,5].every(l => newLocked.includes(l));
-  const compTime     = (allDone && !p.completionTime) ? Date.now() - p.startTime : p.completionTime;
-  const compAt       = (allDone && !p.completedAt)    ? new Date().toISOString()  : p.completedAt;
-
-  const { rows } = await pool.query(
-    `UPDATE participants SET
-       locked_levels    = $2,
-       level_codes      = $3,
-       level_accuracies = $4,
-       level_times      = $5,
-       completion_time  = $6,
-       completed_at     = $7
-     WHERE id = $1
-     RETURNING *`,
-    [
-      participantId,
-      JSON.stringify(newLocked),
-      JSON.stringify(newCodes),
-      JSON.stringify(newAccs),
-      JSON.stringify(newTimes),
-      compTime || null,
-      compAt   || null,
-    ]
-  );
-  return rowToParticipant(rows[0]);
-}
-
-async function saveSubmission(participantId, level, accuracy, code) {
-  const { rows } = await pool.query(
-    `INSERT INTO submissions (participant_id, level, accuracy, code, timestamp)
-     VALUES ($1,$2,$3,$4,NOW()) RETURNING *`,
-    [participantId, level, accuracy, code]
-  );
-  return rowToSubmission(rows[0]);
-}
-
-async function getParticipantBestPerLevel(participantId) {
-  const p = await getParticipantById(participantId);
-  if (!p) return [];
-
-  const { rows } = await pool.query(
-    `SELECT level, MAX(accuracy) as best, COUNT(*) as attempts
-     FROM submissions WHERE participant_id = $1
-     GROUP BY level`,
-    [participantId]
-  );
-
-  const ll = p.lockedLevels || [];
-  return rows.map(r => ({
-    level:        r.level,
-    bestAccuracy: r.best,
-    attempts:     Number(r.attempts),
-    locked:       ll.includes(r.level),
-    code:         (p.levelCodes || {})[r.level]      || null,
-    accuracy:     (p.levelAccuracies || {})[r.level] || r.best,
-  }));
-}
-
-async function getAllParticipants() {
-  const { rows: parts } = await pool.query('SELECT * FROM participants ORDER BY id');
-  const { rows: subs  } = await pool.query(
-    'SELECT participant_id, level, MAX(accuracy) as best FROM submissions GROUP BY participant_id, level'
-  );
-  const { rows: lastSub } = await pool.query(
-    `SELECT DISTINCT ON (participant_id) participant_id, timestamp
-     FROM submissions ORDER BY participant_id, timestamp DESC`
-  );
-
-  const lastSubMap = {};
-  lastSub.forEach(r => { lastSubMap[r.participant_id] = r.timestamp; });
-
-  const subMap = {};
-  subs.forEach(r => {
-    if (!subMap[r.participant_id]) subMap[r.participant_id] = {};
-    subMap[r.participant_id][r.level] = Number(r.best);
+function writeDB(data) {
+  _cache = data;
+  fs.writeFile(DB_FILE, JSON.stringify(data, null, 2), 'utf8', (err) => {
+    if (err) console.error('[DB] Write error:', err.message);
   });
+}
 
-  return parts.map(row => {
-    const p   = rowToParticipant(row);
-    const ll  = p.lockedLevels || [];
-    const bpl = subMap[p.id] || {};
-    const total = Object.values(bpl).reduce((a, b) => a + b, 0);
+function nextId(arr) {
+  if (!arr || arr.length === 0) return 1;
+  return Math.max(...arr.map(r => r.id || 0)) + 1;
+}
 
+function upsertParticipant(name, rollNumber) {
+  const db = readDB();
+  const existing = db.participants.find(p => p.rollNumber === rollNumber);
+  if (existing) return existing;
+  const participant = {
+    id: nextId(db.participants),
+    name, rollNumber,
+    joinedTime: new Date().toISOString(),
+    startTime: Date.now(),
+    completionTime: null,
+    completedAt: null,
+    levelTimes: {},
+    levelStartTimes: {},
+    lockedLevels: [],
+    levelCodes: {},
+    levelAccuracies: {}
+  };
+  db.participants.push(participant);
+  writeDB(db);
+  return participant;
+}
+
+function getParticipantByRoll(rollNumber) {
+  return readDB().participants.find(p => p.rollNumber === rollNumber) || null;
+}
+
+function getParticipantById(id) {
+  return readDB().participants.find(p => p.id === id) || null;
+}
+
+function startLevelTimer(participantId, level) {
+  const db = readDB();
+  const p = db.participants.find(x => x.id === participantId);
+  if (!p) return null;
+  if (!p.levelStartTimes) p.levelStartTimes = {};
+  if (!p.levelStartTimes[level]) {
+    p.levelStartTimes[level] = Date.now();
+    writeDB(db);
+  }
+  return p;
+}
+
+function lockLevel(participantId, level, code, accuracy) {
+  const db = readDB();
+  const p = db.participants.find(x => x.id === participantId);
+  if (!p) return null;
+  if (!p.lockedLevels)    p.lockedLevels    = [];
+  if (!p.levelCodes)      p.levelCodes      = {};
+  if (!p.levelAccuracies) p.levelAccuracies = {};
+  if (!p.levelTimes)      p.levelTimes      = {};
+  if (!p.levelStartTimes) p.levelStartTimes = {};
+  const startMs = p.levelStartTimes[level] || p.startTime;
+  if (!p.lockedLevels.includes(level)) p.lockedLevels.push(level);
+  p.levelCodes[level]      = code;
+  p.levelAccuracies[level] = accuracy;
+  p.levelTimes[level]      = Date.now() - startMs;
+  if ([1,2,3,4,5].every(l => p.lockedLevels.includes(l)) && !p.completionTime) {
+    p.completionTime = Date.now() - p.startTime;
+    p.completedAt    = new Date().toISOString();
+  }
+  writeDB(db);
+  return p;
+}
+
+function getAllParticipants() {
+  const db = readDB();
+  return db.participants.map(p => {
+    const subs = db.submissions.filter(s => s.participantId === p.id);
+    const lockedLevels = p.lockedLevels || [];
+    const total = Object.values(getBestPerLevel(subs)).reduce((a,b)=>a+b,0);
     return {
       id: p.id, name: p.name, rollNumber: p.rollNumber,
       joinedTime: p.joinedTime, startTime: p.startTime,
       completionTime: p.completionTime || null,
-      completedAt:    p.completedAt    || null,
-      levelTimes:     p.levelTimes     || {},
-      levelsCompleted: ll.length,
-      lockedLevels:    ll,
-      totalSubmissions: Object.values(bpl).length,
-      avgAccuracy: ll.length > 0 ? Math.round(total / 5) : 0,
-      lastSubmission: lastSubMap[p.id] || null,
-      currentLevel: ll.length < 5 ? ll.length + 1 : 5,
+      completedAt: p.completedAt || null,
+      levelTimes: p.levelTimes || {},
+      levelsCompleted: lockedLevels.length, lockedLevels,
+      totalSubmissions: subs.length,
+      avgAccuracy: lockedLevels.length > 0 ? Math.round(total/5) : 0,
+      lastSubmission: subs.length > 0 ? subs[subs.length-1].timestamp : null,
+      currentLevel: lockedLevels.length < 5 ? lockedLevels.length + 1 : 5
     };
-  }).sort((a, b) => {
+  }).sort((a,b) => {
     if (b.levelsCompleted !== a.levelsCompleted) return b.levelsCompleted - a.levelsCompleted;
-    if (b.avgAccuracy     !== a.avgAccuracy)     return b.avgAccuracy     - a.avgAccuracy;
-    if (a.completionTime  && b.completionTime)   return a.completionTime  - b.completionTime;
+    if (b.avgAccuracy !== a.avgAccuracy) return b.avgAccuracy - a.avgAccuracy;
+    if (a.completionTime && b.completionTime) return a.completionTime - b.completionTime;
     return 0;
   });
 }
 
-async function getParticipantDetail(id) {
-  const p = await getParticipantById(id);
-  if (!p) return null;
-
-  const { rows: subs } = await pool.query(
-    'SELECT * FROM submissions WHERE participant_id = $1 ORDER BY timestamp DESC',
-    [id]
-  );
-
+function getParticipantDetail(id) {
+  const db = readDB();
+  const participant = db.participants.find(p => p.id === id);
+  if (!participant) return null;
+  const submissions = db.submissions.filter(s => s.participantId === id)
+    .sort((a,b) => new Date(b.timestamp)-new Date(a.timestamp));
   const topByLevel = {};
   for (let level = 1; level <= 5; level++) {
-    const { rows: top } = await pool.query(
-      `SELECT s.*, p.name as owner_name, p.roll_number as owner_roll
-       FROM submissions s
-       JOIN participants p ON p.id = s.participant_id
-       WHERE s.level = $1
-       ORDER BY s.accuracy DESC LIMIT 5`,
-      [level]
-    );
-    topByLevel[level] = top.map(r => ({
-      id: r.id, accuracy: r.accuracy, timestamp: r.timestamp, code: r.code,
-      name: r.owner_name, rollNumber: r.owner_roll,
-    }));
+    topByLevel[level] = db.submissions.filter(s => s.level === level)
+      .sort((a,b) => b.accuracy-a.accuracy).slice(0,5)
+      .map(s => {
+        const owner = db.participants.find(p => p.id === s.participantId);
+        return { id: s.id, accuracy: s.accuracy, timestamp: s.timestamp, code: s.code,
+          name: owner ? owner.name : 'Unknown', rollNumber: owner ? owner.rollNumber : '' };
+      });
   }
-
-  return {
-    participant:     p,
-    submissions:     subs.map(rowToSubmission),
-    topByLevel,
-    levelTimes:      p.levelTimes      || {},
-    lockedLevels:    p.lockedLevels    || [],
-    levelCodes:      p.levelCodes      || {},
-    levelAccuracies: p.levelAccuracies || {},
-  };
+  return { participant, submissions, topByLevel,
+    levelTimes: participant.levelTimes || {},
+    lockedLevels: participant.lockedLevels || [],
+    levelCodes: participant.levelCodes || {},
+    levelAccuracies: participant.levelAccuracies || {} };
 }
 
-async function getLeaderboard() {
-  const { rows: parts } = await pool.query('SELECT * FROM participants ORDER BY id');
-  const { rows: subs  } = await pool.query(
-    'SELECT participant_id, level, MAX(accuracy) as best FROM submissions GROUP BY participant_id, level'
-  );
-  const { rows: lastSub } = await pool.query(
-    `SELECT DISTINCT ON (participant_id) participant_id, timestamp
-     FROM submissions ORDER BY participant_id, timestamp DESC`
-  );
+function saveSubmission(participantId, level, accuracy, code) {
+  const db = readDB();
+  const submission = { id: nextId(db.submissions), participantId, level, accuracy, code,
+    timestamp: new Date().toISOString() };
+  db.submissions.push(submission);
+  writeDB(db);
+  return submission;
+}
 
-  const lastSubMap = {};
-  lastSub.forEach(r => { lastSubMap[r.participant_id] = r.timestamp; });
-
-  const subMap = {};
-  subs.forEach(r => {
-    if (!subMap[r.participant_id]) subMap[r.participant_id] = {};
-    subMap[r.participant_id][r.level] = Number(r.best);
+function getParticipantBestPerLevel(participantId) {
+  const db = readDB();
+  const p = db.participants.find(x => x.id === participantId);
+  const subs = db.submissions.filter(s => s.participantId === participantId);
+  const byLevel = {};
+  subs.forEach(s => {
+    if (!byLevel[s.level]) byLevel[s.level] = { level: s.level, bestAccuracy: s.accuracy, attempts: 0 };
+    else if (s.accuracy > byLevel[s.level].bestAccuracy) byLevel[s.level].bestAccuracy = s.accuracy;
+    byLevel[s.level].attempts++;
   });
+  if (p) {
+    const ll = p.lockedLevels || [];
+    Object.keys(byLevel).forEach(l => {
+      byLevel[l].locked   = ll.includes(parseInt(l));
+      byLevel[l].code     = (p.levelCodes || {})[l]      || null;
+      byLevel[l].accuracy = (p.levelAccuracies || {})[l] || byLevel[l].bestAccuracy;
+    });
+  }
+  return Object.values(byLevel);
+}
 
-  return parts.map(row => {
-    const p     = rowToParticipant(row);
-    const ll    = p.lockedLevels || [];
-    const bpl   = subMap[p.id]   || {};
-    const total = Object.values(bpl).reduce((a, b) => a + b, 0);
-    return {
-      id: p.id, name: p.name, rollNumber: p.rollNumber,
-      levelsCompleted: ll.length,
-      avgAccuracy:     Math.round(total / 5),
-      completionTime:  p.completionTime || null,
-      completedAt:     p.completedAt    || null,
-      startTime:       p.startTime,
-      lastSubmission:  lastSubMap[p.id] || null,
-    };
-  }).sort((a, b) => {
+function getLeaderboard() {
+  const db = readDB();
+  return db.participants.map(p => {
+    const subs = db.submissions.filter(s => s.participantId === p.id);
+    const best = getBestPerLevel(subs);
+    const ll   = p.lockedLevels || [];
+    const total = Object.values(best).reduce((a,b)=>a+b,0);
+    return { id: p.id, name: p.name, rollNumber: p.rollNumber,
+      levelsCompleted: ll.length, avgAccuracy: Math.round(total/5),
+      completionTime: p.completionTime || null, completedAt: p.completedAt || null,
+      startTime: p.startTime,
+      lastSubmission: subs.length > 0 ? subs[subs.length-1].timestamp : null };
+  }).sort((a,b) => {
     if (b.levelsCompleted !== a.levelsCompleted) return b.levelsCompleted - a.levelsCompleted;
-    if (b.avgAccuracy     !== a.avgAccuracy)     return b.avgAccuracy     - a.avgAccuracy;
-    if (a.completionTime  && b.completionTime)   return a.completionTime  - b.completionTime;
+    if (b.avgAccuracy !== a.avgAccuracy) return b.avgAccuracy - a.avgAccuracy;
+    if (a.completionTime && b.completionTime) return a.completionTime - b.completionTime;
     if (a.completionTime) return -1;
     if (b.completionTime) return  1;
     return 0;
   });
 }
 
-module.exports = {
-  upsertParticipant, getParticipantByRoll, getParticipantById,
+function getBestPerLevel(subs) {
+  const best = {};
+  subs.forEach(s => { if (!best[s.level] || s.accuracy > best[s.level]) best[s.level] = s.accuracy; });
+  return best;
+}
+
+module.exports = { upsertParticipant, getParticipantByRoll, getParticipantById,
   getAllParticipants, getParticipantDetail, saveSubmission,
-  getParticipantBestPerLevel, getLeaderboard, startLevelTimer, lockLevel,
-};
+  getParticipantBestPerLevel, getLeaderboard, startLevelTimer, lockLevel };

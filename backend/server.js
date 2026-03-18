@@ -1,4 +1,4 @@
-// backend/server.js — Production Express API for Render + Supabase
+// backend/server.js — Production Express API for Render
 'use strict';
 
 const express = require('express');
@@ -10,11 +10,14 @@ const { judgeSubmission } = require('./judge');
 const app         = express();
 const PORT        = process.env.PORT || 3000;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'changeme';
-const FRONTEND_URL = process.env.FRONTEND_URL || '';
 
 // ─── CORS ─────────────────────────────────────────────────────
+// Allow the Vercel frontend URL + local dev
+const FRONTEND_URL = process.env.FRONTEND_URL || '';
+
 app.use(cors({
   origin: (origin, cb) => {
+    // Allow server-to-server (no origin), localhost, and the configured Vercel URL
     if (!origin) return cb(null, true);
     const allowed = [
       FRONTEND_URL,
@@ -22,6 +25,7 @@ app.use(cors({
       'http://localhost:5173',
       'http://127.0.0.1:3000',
     ].filter(Boolean);
+    // Also allow *.vercel.app dynamically
     if (origin.endsWith('.vercel.app') || allowed.includes(origin)) return cb(null, true);
     cb(new Error('CORS blocked: ' + origin));
   },
@@ -32,12 +36,14 @@ app.use(cors({
 
 app.use(express.json({ limit: '2mb' }));
 
+// Request logger
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// ─── /levels ─────────────────────────────────────────────────
+// ─── /levels — serve reference HTMLs in iframes from ANY origin ──
+// Must be registered BEFORE general cors middleware
 app.use('/levels', (req, res, next) => {
   res.removeHeader('X-Frame-Options');
   res.setHeader('Content-Security-Policy', 'frame-ancestors *');
@@ -48,7 +54,7 @@ app.use('/levels', (req, res, next) => {
 // ─── Health ───────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', time: Date.now() }));
 
-// ─── Heartbeat ───────────────────────────────────────────────
+// ─── Heartbeat (active participant tracking) ──────────────────
 const activeHeartbeats = new Map();
 
 app.post('/api/heartbeat', (req, res) => {
@@ -59,15 +65,16 @@ app.post('/api/heartbeat', (req, res) => {
   } catch { return res.json({ ok: false }); }
 });
 
-// ─── Join ─────────────────────────────────────────────────────
-app.post('/api/join', async (req, res) => {
+// ─── Participant routes ───────────────────────────────────────
+
+app.post('/api/join', (req, res) => {
   try {
     const { name, rollNumber } = req.body || {};
     if (!name || !rollNumber)
       return res.status(400).json({ success: false, error: 'Name and roll number required.' });
     const roll        = String(rollNumber).trim().toUpperCase();
-    const participant = await db.upsertParticipant(String(name).trim(), roll);
-    const progress    = await db.getParticipantBestPerLevel(participant.id);
+    const participant = db.upsertParticipant(String(name).trim(), roll);
+    const progress    = db.getParticipantBestPerLevel(participant.id);
     return res.json({ success: true, participant, progress });
   } catch (err) {
     console.error('JOIN:', err);
@@ -75,25 +82,23 @@ app.post('/api/join', async (req, res) => {
   }
 });
 
-// ─── Start level ──────────────────────────────────────────────
-app.post('/api/start-level', async (req, res) => {
+app.post('/api/start-level', (req, res) => {
   try {
     const { rollNumber, level } = req.body || {};
     if (!rollNumber || !level) return res.status(400).json({ error: 'Missing fields.' });
-    const p = await db.getParticipantByRoll(String(rollNumber).toUpperCase());
+    const p = db.getParticipantByRoll(String(rollNumber).toUpperCase());
     if (!p) return res.status(404).json({ error: 'Participant not found.' });
-    await db.startLevelTimer(p.id, parseInt(level));
+    db.startLevelTimer(p.id, parseInt(level));
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// ─── Judge ───────────────────────────────────────────────────
 app.post('/api/judge', async (req, res) => {
   try {
     const { code, level, rollNumber } = req.body || {};
     if (!code || !level || !rollNumber)
       return res.status(400).json({ success: false, error: 'code, level and rollNumber required.' });
-    const p = await db.getParticipantByRoll(String(rollNumber).toUpperCase());
+    const p = db.getParticipantByRoll(String(rollNumber).toUpperCase());
     if (!p) return res.status(404).json({ success: false, error: 'Participant not found.' });
     const result = await judgeSubmission(code, parseInt(level));
     return res.json(result);
@@ -103,13 +108,12 @@ app.post('/api/judge', async (req, res) => {
   }
 });
 
-// ─── Submit ──────────────────────────────────────────────────
 app.post('/api/submit', async (req, res) => {
   try {
     const { code, level, rollNumber } = req.body || {};
     if (!code || !level || !rollNumber)
       return res.status(400).json({ success: false, error: 'Missing fields.' });
-    const p = await db.getParticipantByRoll(String(rollNumber).toUpperCase());
+    const p = db.getParticipantByRoll(String(rollNumber).toUpperCase());
     if (!p) return res.status(404).json({ success: false, error: 'Participant not found.' });
 
     const lvl    = parseInt(level);
@@ -121,12 +125,12 @@ app.post('/api/submit', async (req, res) => {
     if (!result.valid)
       return res.status(422).json({ success: false, errors: result.errors, score: 0 });
     if (result.score < 50)
-      return res.status(422).json({ success: false, errors: ['Need ≥50% to submit.'],
+      return res.status(422).json({ success: false, errors: ['Need 50%+ to submit.'],
         score: result.score, breakdown: result.breakdown });
 
-    await db.saveSubmission(p.id, lvl, result.score, code);
-    const updated  = await db.lockLevel(p.id, lvl, code, result.score);
-    const progress = await db.getParticipantBestPerLevel(p.id);
+    db.saveSubmission(p.id, lvl, result.score, code);
+    const updated  = db.lockLevel(p.id, lvl, code, result.score);
+    const progress = db.getParticipantBestPerLevel(p.id);
 
     return res.json({
       success: true, score: result.score, breakdown: result.breakdown, progress,
@@ -139,43 +143,42 @@ app.post('/api/submit', async (req, res) => {
   }
 });
 
-// ─── Leaderboard ─────────────────────────────────────────────
-app.get('/api/leaderboard', async (req, res) => {
-  try { return res.json(await db.getLeaderboard()); }
+app.get('/api/leaderboard', (req, res) => {
+  try { return res.json(db.getLeaderboard()); }
   catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// ─── Progress ────────────────────────────────────────────────
-app.get('/api/progress/:rollNumber', async (req, res) => {
+app.get('/api/progress/:rollNumber', (req, res) => {
   try {
-    const p = await db.getParticipantByRoll(req.params.rollNumber.toUpperCase());
+    const p = db.getParticipantByRoll(req.params.rollNumber.toUpperCase());
     if (!p) return res.status(404).json({ error: 'Not found.' });
-    return res.json({ participant: p, progress: await db.getParticipantBestPerLevel(p.id) });
+    return res.json({ participant: p, progress: db.getParticipantBestPerLevel(p.id) });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// ─── Admin auth ──────────────────────────────────────────────
+// ─── Admin routes ─────────────────────────────────────────────
+
 function adminAuth(req, res, next) {
   const token = req.headers['x-admin-token'] || req.query.token;
   if (token !== ADMIN_TOKEN) return res.status(401).json({ error: 'Unauthorized.' });
   next();
 }
 
-app.get('/api/admin/participants', adminAuth, async (req, res) => {
-  try { return res.json(await db.getAllParticipants()); }
+app.get('/api/admin/participants', adminAuth, (req, res) => {
+  try { return res.json(db.getAllParticipants()); }
   catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/participant/:id', adminAuth, async (req, res) => {
+app.get('/api/admin/participant/:id', adminAuth, (req, res) => {
   try {
-    const detail = await db.getParticipantDetail(parseInt(req.params.id));
+    const detail = db.getParticipantDetail(parseInt(req.params.id));
     if (!detail) return res.status(404).json({ error: 'Not found.' });
     return res.json(detail);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/leaderboard', adminAuth, async (req, res) => {
-  try { return res.json(await db.getLeaderboard()); }
+app.get('/api/admin/leaderboard', adminAuth, (req, res) => {
+  try { return res.json(db.getLeaderboard()); }
   catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
@@ -186,13 +189,13 @@ app.get('/api/active-rolls', adminAuth, (req, res) => {
   return res.json(active);
 });
 
-// ─── 404 ─────────────────────────────────────────────────────
+// ─── 404 catch-all ───────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Not found.' }));
 
 // ─── Start ───────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n🚀 Vibe Animation API running on port ${PORT}`);
-  console.log(`   DATABASE     = ${process.env.DATABASE_URL ? 'Supabase ✔' : '⚠️  DATABASE_URL not set!'}`);
   console.log(`   FRONTEND_URL = ${FRONTEND_URL || '(any .vercel.app)'}`);
-  console.log(`   ADMIN_TOKEN  = ${ADMIN_TOKEN}\n`);
+  console.log(`   ADMIN_TOKEN  = ${ADMIN_TOKEN}`);
+  console.log(`   DB_FILE      = ${process.env.DB_PATH || '../db.json'}\n`);
 });

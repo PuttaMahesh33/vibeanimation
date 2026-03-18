@@ -1,8 +1,0 @@
-{
-  "name": "vibe-animation-backend",
-  "type": "web",
-  "build": {
-    "buildCommand": "npm install",
-    "startCommand": "node server.js"
-  }
-}

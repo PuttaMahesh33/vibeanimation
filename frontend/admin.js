@@ -2,7 +2,7 @@
 'use strict';
 
 // ⚠️  Replace with your actual Render backend URL
-const BACKEND_URL = window.BACKEND_URL || 'https://vibeanimation-pm-3l55.onrender.com';
+const BACKEND_URL = window.BACKEND_URL || 'https://YOUR_RENDER_APP.onrender.com';
 
 
 let TOKEN       = localStorage.getItem('adminToken') || '';
@@ -13,9 +13,6 @@ let countdown   = 5;
 let refreshInt;
 let currentSection = 'all';
 const codeCache = {};
-
-// Stable-render hashes — prevent DOM flicker when data hasn't changed
-const _renderHash = { all: '', active: '', completed: '', leaderboard: '' };
 
 // ─── Formatters ───────────────────────────────────────────────
 
@@ -171,10 +168,7 @@ function renderAll(q) {
       <td class="muted">${ago(p.lastSubmission || p.joinedTime)}</td>
     </tr>`;
   }).join('') || emptyRow(8);
-  if (rows !== _renderHash.all) {
-    _renderHash.all = rows;
-    el('allBody').innerHTML = rows;
-  }
+  el('allBody').innerHTML = rows;
 }
 
 function renderActive(q) {
@@ -193,10 +187,7 @@ function renderActive(q) {
         <td class="muted">${ago(p.lastSubmission || p.joinedTime)}</td>
       </tr>`;
     }).join('') || emptyRow(7, 'No active participants right now');
-  if (rows !== _renderHash.active) {
-    _renderHash.active = rows;
-    el('activeBody').innerHTML = rows;
-  }
+  el('activeBody').innerHTML = rows;
 }
 
 function renderCompleted(q) {
@@ -215,10 +206,7 @@ function renderCompleted(q) {
       <td>${badge(p.avgAccuracy)}</td>
       <td class="mono amber">${fmt(p.completionTime)}</td>
     </tr>`).join('') || emptyRow(6, 'No completed participants yet');
-  if (rows !== _renderHash.completed) {
-    _renderHash.completed = rows;
-    el('completedBody').innerHTML = rows;
-  }
+  el('completedBody').innerHTML = rows;
 }
 
 function renderLeaderboard(q) {
@@ -226,36 +214,31 @@ function renderLeaderboard(q) {
   const winTags = ['🥇 1st Winner','🥈 2nd Winner','🥉 3rd Winner'];
   const wCls    = ['w1','w2','w3'];
   const filtered = lbData.filter(e => match(e, q));
-  const newHtml = filtered.length
-    ? filtered.map((e, fi) => {
-        const gi  = lbData.indexOf(e);
-        const win = gi < 3;
-        const timeStr = e.completionTime
-          ? fmt(e.completionTime)
-          : fmt(Date.now() - e.startTime) + ' <em class="ongoing">ongoing</em>';
-        return `<div class="lb-card ${win ? wCls[gi] : ''}" onclick="openDetail(${e.id})" style="cursor:pointer">
-          <div class="lb-left">
-            <div class="lb-medal">${medals[gi] || '#'+(gi+1)}</div>
-            <div>
-              <div class="lb-name-row">
-                <span class="lb-name">${e.name}</span>
-                ${win ? `<span class="win-tag ${wCls[gi]}">${winTags[gi]}</span>` : ''}
-              </div>
-              <div class="lb-roll">${e.rollNumber}</div>
-              <div class="lb-meta">
-                <span>Levels: <strong>${e.levelsCompleted}/5</strong></span>
-                <span>⏱ ${timeStr}</span>
-              </div>
-            </div>
+  if (!filtered.length) { el('lbGrid').innerHTML = '<div class="empty-card">No participants found.</div>'; return; }
+  el('lbGrid').innerHTML = filtered.map((e, fi) => {
+    const gi  = lbData.indexOf(e);
+    const win = gi < 3;
+    const timeStr = e.completionTime
+      ? fmt(e.completionTime)
+      : fmt(Date.now() - e.startTime) + ' <em class="ongoing">ongoing</em>';
+    return `<div class="lb-card ${win ? wCls[gi] : ''}" onclick="openDetail(e.id)" style="cursor:pointer">
+      <div class="lb-left">
+        <div class="lb-medal">${medals[gi] || '#'+(gi+1)}</div>
+        <div>
+          <div class="lb-name-row">
+            <span class="lb-name">${e.name}</span>
+            ${win ? `<span class="win-tag ${wCls[gi]}">${winTags[gi]}</span>` : ''}
           </div>
-          <div class="lb-score">${e.avgAccuracy}<span class="pct">%</span></div>
-        </div>`;
-      }).join('')
-    : '<div class="empty-card">No participants found.</div>';
-  if (newHtml !== _renderHash.leaderboard) {
-    _renderHash.leaderboard = newHtml;
-    el('lbGrid').innerHTML = newHtml;
-  }
+          <div class="lb-roll">${e.rollNumber}</div>
+          <div class="lb-meta">
+            <span>Levels: <strong>${e.levelsCompleted}/5</strong></span>
+            <span>⏱ ${timeStr}</span>
+          </div>
+        </div>
+      </div>
+      <div class="lb-score">${e.avgAccuracy}<span class="pct">%</span></div>
+    </div>`;
+  }).join('');
 }
 
 function emptyRow(cols, msg = 'No participants found') {
